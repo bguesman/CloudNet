@@ -93,6 +93,6 @@ def infill(images, epsilon):
     return images
 
 # test
-k_data_path = "/home/brad/Graphics/CloudGAN/CloudGAN/data/Kaggle/test/"
-k_processed_data_path = "/home/brad/Graphics/CloudGAN/CloudGAN/data/Kaggle/test-processed/"
+k_data_path = "data/train"
+k_data_path = "data/train_processed"
 preprocess(k_data_path, k_processed_data_path)
