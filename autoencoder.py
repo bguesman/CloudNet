@@ -29,7 +29,7 @@ class AutoEncoder(tf.keras.Model):
         self.low_res = 16
         
         # Dimension of encoded latent space
-        self.latent_dimension = 512
+        self.latent_dimension = 2048
 
         # Downsample layers
         self.encode_resolutions = [128, 64, 32, 16, 8, 4]
