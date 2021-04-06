@@ -33,7 +33,7 @@ def train_epoch(autoencoder, images, epoch, batch_size=8):
     # Shuffle
     np.random.shuffle(images)
     tensor_images = tf.convert_to_tensor(images, dtype=tf.float32)
-    tensor_images = tfa.image.rotate(tensor_images, 2 * math.pi * tf.cast(tf.random.uniform([tensor_images.shape[0]], maxval=4, dtype=tf.int32), dtype="float"), fill_mode="WRAP")
+    # tensor_images = tfa.image.rotate(tensor_images, 2 * math.pi * tf.cast(tf.random.uniform([tensor_images.shape[0]], maxval=4, dtype=tf.int32), dtype="float"), fill_mode="WRAP")
 
     # Split into batches.
     num_batches = int(images.shape[0] / batch_size)
@@ -42,17 +42,19 @@ def train_epoch(autoencoder, images, epoch, batch_size=8):
             tensor_images[i * batch_size:(i + 1) * batch_size, :, :, :], epoch, i)  
 
 def train(autoencoder, images, out_path, epochs=1):
+    # Grab the test image before we shuffle
+    test_image = images[0:1,:,:,:]
     for i in range(epochs):
         train_epoch(autoencoder, images, i)
         if i % 1 == 0:
-            test(autoencoder, images[0:1,:,:,:], out_path + "/test_" + str(i))
+            test(autoencoder, test_image, out_path + "/test_" + str(i))
         # TODO: checkpoint
 
 def test(autoencoder, image, path):
     # Generate a random image
     generated = autoencoder(image)
-    cv2.imwrite(path + "_real.png", 255 * np.clip(tf.squeeze(image[0,:,:,:]).numpy(), 0, 1))
-    cv2.imwrite(path + "_generated.png", 255 * np.clip(tf.squeeze(generated[0,:,:,:]).numpy(), 0, 1))
+    cv2.imwrite(path + "_real.png", 255 * np.clip(tf.squeeze(image[0,:,:,0]).numpy(), 0, 1))
+    cv2.imwrite(path + "_generated.png", 255 * np.clip(tf.squeeze(generated[0,:,:,0]).numpy(), 0, 1))
 
 def load_images(path):
     images = []
@@ -80,7 +82,7 @@ def run(data_path, out_path):
     autoencoder = setup_model()
 
     # Train the model
-    k_epochs = 100
+    k_epochs = 2000
     train(autoencoder, images, out_path, k_epochs)
 
     # TODO: test on test data
