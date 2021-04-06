@@ -1,6 +1,7 @@
 import numpy as np
 import cv2
 import os
+import sys
 import random
 
 import tensorflow as tf
@@ -9,8 +10,8 @@ config.gpu_options.allow_growth = True
 session = tf.compat.v1.Session(config=config)
 
 def preprocess(path, out_path):
-    k_image_size = (2048, 2048)
-    k_max_images = 500
+    k_image_size = (256, 256)
+    k_max_images = 20000
     images = load(path, k_image_size, k_max_images)
 
     # For the black parts of the image, replace them with the parts of other images
@@ -68,6 +69,9 @@ def load(path, size, max_images=1000):
     return images
 
 # Fills in black parts of images with other images based on SSIM
+# [BRAD]: there has to be a smarter and faster way to compare SSIM's without
+# recomputing it for many pairs each time. Maybe there's some sort of data structure
+# we can build before the infill step that groups images by their related SSIM's?
 def infill(images, epsilon):
     for i, img in enumerate(images):
         zero_pixels = (img < epsilon)
@@ -92,7 +96,9 @@ def infill(images, epsilon):
         print("infill completed for image " + str(i))
     return images
 
-# test
-k_data_path = "data/train"
-k_data_path = "data/train_processed"
-preprocess(k_data_path, k_processed_data_path)
+# Run
+if (len(sys.argv) != 3):
+    print("Usage: python preprocess.py <input path> <output path>")
+path_in = sys.argv[1]
+path_out = sys.argv[2]
+preprocess(path_in, path_out)
