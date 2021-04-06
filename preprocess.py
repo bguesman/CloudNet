@@ -38,7 +38,7 @@ def preprocess(path, out_path):
     # cv2.imshow("image 3", images[30])
     # cv2.waitKey(0)
 
-    # Expand so final array is channels
+    # Expand so final dimension is channels
     images = np.expand_dims(images, len(images.shape))
     
     print("Processed " + str(images.shape[0]) + " images")
