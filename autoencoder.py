@@ -53,11 +53,14 @@ class AutoEncoder(tf.keras.Model):
         self.encode_d0_b = tf.keras.layers.BatchNormalization()
         self.encode_d1 = tf.keras.layers.Dense(self.latent_dimension)
 
+        # Loss diffs at which point to stop training particular resolutions.
+        self.stop_loss_diffs = [0.001, 0.01, 1, 5]
+
         # Upsample layers. The goal here is to expand our latent code back out to a full image.
         self.current_resolution_index = 0
-        self.decode_resolutions = [32, 64]
-        self.decode_filters = [512, 256]
-        self.decode_layers = [2, 2]
+        self.decode_resolutions = [32, 64, 128, 256]
+        self.decode_filters = [512, 256, 128, 64]
+        self.decode_layers = [2, 2, 2, 2]
 
         self.decode_lr = [[tf.keras.layers.LeakyReLU() for _ in self.decode_layers] for _ in self.decode_resolutions]
         self.decode_convs = [[tf.keras.layers.Conv2D(filters=filters, kernel_size=3, 
@@ -132,6 +135,9 @@ class AutoEncoder(tf.keras.Model):
         # Make sure we only train the right output layer for this resolution
         for i, layer in enumerate(self.output_conv):
             layer.trainable = (i == self.current_resolution_index)
+
+    def get_stop_loss_diff(self):
+        return self.stop_loss_diffs[self.current_resolution_index]
 
     def loss(self, prediction, ground_truth):
         # The loss is just the L2 norm between the prediction and the ground truth.
