@@ -9,27 +9,32 @@ import cv2
 import os
 import math
 import sys
-import autoencoder
+import encoder
+import style_generator
 
 def setup_model():
-    return autoencoder.AutoEncoder()
+    return encoder.Encoder(), style_generator.StyleGenerator()
 
 def print_avg_loss(avg_loss, epoch):
     print("AVERAGE LOSS FOR EPOCH " + str(epoch) + ": " + str(avg_loss))
 
-def train_batch(autoencoder, batch):
-    with tf.GradientTape() as tape:
+def train_batch(encoder, generator, batch):
+    with tf.GradientTape(persistent=True) as tape:
         # Make a prediction.
-        prediction = autoencoder(batch)
+        prediction = generator(encoder(batch))
         # Compute the loss, which is just the difference between the
         # prediction and the original image.
-        loss = autoencoder.loss(prediction, batch)
+        loss = generator.loss(prediction, batch)
+    
     # Apply the gradients to the model variables.
-    gradients = tape.gradient(loss, autoencoder.trainable_variables)
-    autoencoder.optimizer.apply_gradients(zip(gradients, autoencoder.trainable_variables))
+    encoder_gradients = tape.gradient(loss, encoder.trainable_variables)
+    encoder.optimizer.apply_gradients(zip(encoder_gradients, encoder.trainable_variables))
+    generator_gradients = tape.gradient(loss, generator.trainable_variables)
+    generator.optimizer.apply_gradients(zip(generator_gradients, generator.trainable_variables))
+    
     return loss
 
-def train_epoch(autoencoder, images, epoch, batch_size=8):
+def train_epoch(encoder, generator, images, epoch, batch_size=8):
     # Shuffle
     np.random.shuffle(images)
     tensor_images = tf.convert_to_tensor(images, dtype=tf.float32)
@@ -37,7 +42,7 @@ def train_epoch(autoencoder, images, epoch, batch_size=8):
     avg_loss = 0
     num_batches = int(images.shape[0] / batch_size)
     for i in range(num_batches):
-        avg_loss += train_batch(autoencoder, tensor_images[i * batch_size:(i + 1) * batch_size, :, :, :])  
+        avg_loss += train_batch(encoder, generator, tensor_images[i * batch_size:(i + 1) * batch_size, :, :, :])  
     return avg_loss / num_batches
 
 # Maps image from [-1, 1] to [0, 255]
@@ -48,44 +53,48 @@ def map_to_8_bit(image):
 def map_to_unit(image):
     return (np.float32(image) / 255.0) * 2 - 1
 
-def train(autoencoder, images, out_path, epochs=1):
+def train(encoder, generator, images, out_path, epochs=1):
     # Grab the test image before we shuffle
     test_image = np.copy(images[0:1,:,:,:])
     # Also generate a latent vector to test with.
-    test_latent = tf.linalg.normalize(tf.random.normal([3, autoencoder.latent_dimension]))[0]
+    test_latent = tf.linalg.normalize(tf.random.normal([3, generator.latent_dimension]))[0]
 
     # Create a list of average losses to use indeciding when to advance resolution
     average_loss_diffs = [-4, -3, -2, -1]
     avg_loss = 10e32
+    stop_loss_count = 0
 
     for i in range(0, epochs):
         # Train the epoch and print the loss.
         prev_avg_loss = avg_loss
-        avg_loss = train_epoch(autoencoder, images, i)
+        avg_loss = train_epoch(encoder, generator, images, i)
         print_avg_loss(avg_loss, i)
         
         # Test.
-        test(autoencoder, test_image, test_latent, out_path + "/test_" + str(i))
+        test(encoder, generator, test_image, test_latent, out_path + "/test_" + str(i))
         
         average_loss_diffs.pop(0)
         average_loss_diffs.append(avg_loss - prev_avg_loss)
         average_diff = sum(average_loss_diffs) / len(average_loss_diffs)
         print("Average loss diff: " + str(average_diff))
-        if average_diff > autoencoder.get_stop_loss_diff() and autoencoder.current_resolution_index != len(autoencoder.decode_resolutions):
-            autoencoder.advance_resolution()
-            average_loss_diffs = [-4, -3, -2, -1]
-            avg_loss = 10e32
+        if average_diff > generator.get_stop_loss_diff() and generator.current_resolution_index != len(generator.decode_resolutions):
+            stop_loss_count += 1
+            if stop_loss_count > 5:
+                generator.advance_resolution()
+                average_loss_diffs = [-4, -3, -2, -1]
+                avg_loss = 10e32
+                stop_loss_count = 0
 
-def test(autoencoder, image, style, path):
+def test(encoder, generator, image, style, path):
     # Create a few different versions of the image.
-    target_res = autoencoder.decode_resolutions[autoencoder.current_resolution_index]
+    target_res = generator.decode_resolutions[generator.current_resolution_index]
     target_res_image = tf.image.resize(image, (target_res, target_res))
 
     # Most basic thing: run the image through the whole autoencoder.
-    upscaled = autoencoder(image)
+    upscaled = generator(encoder(image))
 
     # Also try using the low res image and applying a random "style" to it.
-    generated = autoencoder.decode(style)
+    generated = generator(style)
 
     cv2.imwrite(path + "_target.png", tf.squeeze(map_to_8_bit(target_res_image)[0,:,:,0]).numpy())
     cv2.imwrite(path + "_real.png", tf.squeeze(map_to_8_bit(image)[0,:,:,0]).numpy())
@@ -115,11 +124,11 @@ def run(data_path, out_path):
     images = load_images(data_path)
 
     # Create the model.
-    autoencoder = setup_model()
+    encoder, generator = setup_model()
 
     # Train the model
     k_epochs = 2000
-    train(autoencoder, images, out_path, k_epochs)
+    train(encoder, generator, images, out_path, k_epochs)
 
     # TODO: test on test data
 
