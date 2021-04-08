@@ -40,19 +40,19 @@ def train_epoch(autoencoder, images, epoch, batch_size=8):
         avg_loss += train_batch(autoencoder, tensor_images[i * batch_size:(i + 1) * batch_size, :, :, :])  
     return avg_loss / num_batches
 
-# Maps image from [0, 1] to [0, 255]
+# Maps image from [-1, 1] to [0, 255]
 def map_to_8_bit(image):
-    return np.clip(image * 255, 0, 255)
+    return np.clip((image + 1) * 0.5 * 255, 0, 255)
 
-# Maps image from [0, 255] to [0, 1]
+# Maps image from [0, 255] to [-1, 1]
 def map_to_unit(image):
-    return (np.float32(image) / 255.0)
+    return (np.float32(image) / 255.0) * 2 - 1
 
 def train(autoencoder, images, out_path, epochs=1):
     # Grab the test image before we shuffle
     test_image = np.copy(images[0:1,:,:,:])
     # Also generate a latent vector to test with.
-    test_latent = tf.linalg.normalize(tf.random.normal([1, autoencoder.latent_dimension]))[0]
+    test_latent = tf.linalg.normalize(tf.random.normal([3, autoencoder.latent_dimension]))[0]
 
     # Create a list of average losses to use indeciding when to advance resolution
     average_loss_diffs = [-4, -3, -2, -1]
@@ -71,14 +71,13 @@ def train(autoencoder, images, out_path, epochs=1):
         average_loss_diffs.append(avg_loss - prev_avg_loss)
         average_diff = sum(average_loss_diffs) / len(average_loss_diffs)
         print("Average loss diff: " + str(average_diff))
-        if average_diff > autoencoder.get_stop_loss_diff():
+        if average_diff > autoencoder.get_stop_loss_diff() and autoencoder.current_resolution_index != len(autoencoder.decode_resolutions):
             autoencoder.advance_resolution()
             average_loss_diffs = [-4, -3, -2, -1]
             avg_loss = 10e32
 
 def test(autoencoder, image, style, path):
     # Create a few different versions of the image.
-    low_res_image = tf.image.resize(image, (autoencoder.low_res, autoencoder.low_res))
     target_res = autoencoder.decode_resolutions[autoencoder.current_resolution_index]
     target_res_image = tf.image.resize(image, (target_res, target_res))
 
@@ -86,13 +85,14 @@ def test(autoencoder, image, style, path):
     upscaled = autoencoder(image)
 
     # Also try using the low res image and applying a random "style" to it.
-    generated = autoencoder.decode(style, low_res_image)
+    generated = autoencoder.decode(style)
 
-    cv2.imwrite(path + "_low_res.png", tf.squeeze(map_to_8_bit(low_res_image)[0,:,:,0]).numpy())
     cv2.imwrite(path + "_target.png", tf.squeeze(map_to_8_bit(target_res_image)[0,:,:,0]).numpy())
     cv2.imwrite(path + "_real.png", tf.squeeze(map_to_8_bit(image)[0,:,:,0]).numpy())
     cv2.imwrite(path + "_upscaled.png", tf.squeeze(map_to_8_bit(upscaled)[0,:,:,0]).numpy())
-    cv2.imwrite(path + "_generated.png", tf.squeeze(map_to_8_bit(generated)[0,:,:,0]).numpy())
+    cv2.imwrite(path + "_generated_0.png", tf.squeeze(map_to_8_bit(generated)[0,:,:,0]).numpy())
+    cv2.imwrite(path + "_generated_1.png", tf.squeeze(map_to_8_bit(generated)[1,:,:,0]).numpy())
+    cv2.imwrite(path + "_generated_2.png", tf.squeeze(map_to_8_bit(generated)[2,:,:,0]).numpy())
 
 def load_images(path):
     images = []

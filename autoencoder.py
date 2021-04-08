@@ -25,9 +25,6 @@ class AutoEncoder(tf.keras.Model):
 
         # Initialization standard deviation for the convolutional layers.
         self.initialize_std_dev = 0.05
-
-        # Low res map
-        self.low_res = 16
         
         # Dimension of encoded latent space
         self.latent_dimension = 512
@@ -54,13 +51,15 @@ class AutoEncoder(tf.keras.Model):
         self.encode_d1 = tf.keras.layers.Dense(self.latent_dimension)
 
         # Loss diffs at which point to stop training particular resolutions.
-        self.stop_loss_diffs = [0.001, 0.01, 1, 5]
+        self.stop_loss_diffs = [0.001, 0.1, 0.5, 1, 5, 10, 20]
 
-        # Upsample layers. The goal here is to expand our latent code back out to a full image.
+        # Upsample layers. The goal here is to expand the learned constant representation
+        # back up to a full image, injecting our encoded style along the way.
         self.current_resolution_index = 0
-        self.decode_resolutions = [32, 64, 128, 256]
-        self.decode_filters = [512, 256, 128, 64]
-        self.decode_layers = [2, 2, 2, 2]
+        self.decode_resolutions = [4, 8, 16, 32, 64, 128, 256]
+        self.base = tf.Variable(tf.random.normal((1, self.decode_resolutions[0], self.decode_resolutions[0], 512)))
+        self.decode_filters = [512, 256, 128, 64, 32, 16, 8]
+        self.decode_layers = [2, 2, 2, 2, 2, 2, 2]
 
         self.decode_lr = [[tf.keras.layers.LeakyReLU() for _ in self.decode_layers] for _ in self.decode_resolutions]
         self.decode_convs = [[tf.keras.layers.Conv2D(filters=filters, kernel_size=3, 
@@ -86,7 +85,7 @@ class AutoEncoder(tf.keras.Model):
 
     def call(self, input):
         encoded = self.encode(input)
-        return self.decode(encoded, tf.image.resize(input, (self.low_res, self.low_res)))
+        return self.decode(encoded)
     
     def encode(self, input):
         # Squish the input image down to the latent state.
@@ -99,9 +98,9 @@ class AutoEncoder(tf.keras.Model):
         encoded = self.encode_d0_lr(self.encode_d0_b(self.encode_d0(encoded)))
         return tf.linalg.normalize(self.encode_d1(encoded), axis=1)[0]
 
-    def decode(self, encoded, low_res):
+    def decode(self, encoded):
         # Expand the low res image back into a high res image.
-        decoded = low_res
+        decoded = tf.repeat(self.base, encoded.shape[0], axis=0)
         for i in range(self.current_resolution_index + 1):
             res = self.decode_resolutions[i]
             for j in range(self.decode_layers[i]):
