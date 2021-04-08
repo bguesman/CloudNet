@@ -21,7 +21,7 @@ class StyleGenerator(tf.keras.Model):
 
         # Define the optimizer we want to use to train the model.
         self.learning_rate = learning_rate
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate, beta_1=0.5)
 
         # Initialization standard deviation for the convolutional layers.
         self.initialize_std_dev = 0.05
@@ -100,6 +100,9 @@ class StyleGenerator(tf.keras.Model):
         # Make sure we only train the right output layer for this resolution
         for i, layer in enumerate(self.output_conv):
             layer.trainable = (i == self.current_resolution_index)
+
+    def get_current_resolution(self):
+        return self.decode_resolutions[self.current_resolution_index]
 
     def get_stop_loss_diff(self):
         return self.stop_loss_diffs[self.current_resolution_index]

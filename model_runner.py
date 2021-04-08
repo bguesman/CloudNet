@@ -9,41 +9,67 @@ import cv2
 import os
 import math
 import sys
-import encoder
+import discriminator
 import style_generator
 
+k_fake = 0
+k_real = 1
+
 def setup_model():
-    return encoder.Encoder(), style_generator.StyleGenerator()
+    return discriminator.Discriminator(), style_generator.StyleGenerator()
 
-def print_avg_loss(avg_loss, epoch):
-    print("AVERAGE LOSS FOR EPOCH " + str(epoch) + ": " + str(avg_loss))
+def print_avg_loss(avg_disc_loss, avg_gen_loss, epoch):
+    print("AVERAGE LOSSES FOR EPOCH " + str(epoch))
+    print("DISCRIMINATOR: " + str(avg_disc_loss))
+    print("GENERATOR: " + str(avg_gen_loss))
 
-def train_batch(encoder, generator, batch):
-    with tf.GradientTape(persistent=True) as tape:
-        # Make a prediction.
-        prediction = generator(encoder(batch))
-        # Compute the loss, which is just the difference between the
-        # prediction and the original image.
-        loss = generator.loss(prediction, batch)
-    
-    # Apply the gradients to the model variables.
-    encoder_gradients = tape.gradient(loss, encoder.trainable_variables)
-    encoder.optimizer.apply_gradients(zip(encoder_gradients, encoder.trainable_variables))
-    generator_gradients = tape.gradient(loss, generator.trainable_variables)
-    generator.optimizer.apply_gradients(zip(generator_gradients, generator.trainable_variables))
-    
+def generate_random_style(batch_size, latent_dimension):
+    return tf.linalg.normalize(tf.random.normal((batch_size, latent_dimension)), axis=1)[0]
+
+def train_discriminator(discriminator, generator, batch):
+    style = generate_random_style(batch.shape[0], generator.latent_dimension)
+    disc_res = discriminator.get_current_resolution()
+    with tf.GradientTape() as tape:
+        generated = generator(style)
+        real_and_fake = tf.concat([generated, tf.image.resize(batch, (disc_res, disc_res))], axis=0)
+        prediction = discriminator(real_and_fake)
+        truth = tf.concat([tf.fill((batch.shape[0], 1), k_fake), tf.fill((batch.shape[0], 1), k_real)], axis=0)
+        loss = discriminator.loss(prediction, truth)
+    # Apply gradients to the generator
+    gradients = tape.gradient(loss, discriminator.trainable_variables)
+    discriminator.optimizer.apply_gradients(zip(gradients, discriminator.trainable_variables))
     return loss
 
-def train_epoch(encoder, generator, images, epoch, batch_size=8):
+def train_generator(discriminator, generator, batch):
+    style = generate_random_style(batch.shape[0] * 2, generator.latent_dimension)
+    with tf.GradientTape() as tape:
+        generated = generator(style)
+        prediction = discriminator(generated)
+        loss = discriminator.loss(prediction, tf.fill((batch.shape[0] * 2, 1), k_fake))
+        negative_loss = -loss
+    # Apply gradients to the generator
+    gradients = tape.gradient(negative_loss, generator.trainable_variables)
+    generator.optimizer.apply_gradients(zip(gradients, generator.trainable_variables))
+    return loss
+
+def train_batch(discriminator, generator, batch):
+    discriminator_loss = train_discriminator(discriminator, generator, batch)
+    generator_loss = train_generator(discriminator, generator, batch)
+    return discriminator_loss, generator_loss
+
+def train_epoch(discriminator, generator, images, epoch, batch_size=8):
     # Shuffle
     np.random.shuffle(images)
     tensor_images = tf.convert_to_tensor(images, dtype=tf.float32)
     # Split into batches.
-    avg_loss = 0
+    avg_disc_loss = 0
+    avg_gen_loss = 0
     num_batches = int(images.shape[0] / batch_size)
     for i in range(num_batches):
-        avg_loss += train_batch(encoder, generator, tensor_images[i * batch_size:(i + 1) * batch_size, :, :, :])  
-    return avg_loss / num_batches
+        disc_loss, gen_loss = train_batch(discriminator, generator, tensor_images[i * batch_size:(i + 1) * batch_size, :, :, :])  
+        avg_disc_loss += disc_loss 
+        avg_gen_loss += gen_loss
+    return avg_disc_loss / num_batches, avg_gen_loss / num_batches
 
 # Maps image from [-1, 1] to [0, 255]
 def map_to_8_bit(image):
@@ -53,52 +79,30 @@ def map_to_8_bit(image):
 def map_to_unit(image):
     return (np.float32(image) / 255.0) * 2 - 1
 
-def train(encoder, generator, images, out_path, epochs=1):
+def train(discriminator, generator, images, out_path, epochs=1):
     # Grab the test image before we shuffle
     test_image = np.copy(images[0:1,:,:,:])
     # Also generate a latent vector to test with.
-    test_latent = tf.linalg.normalize(tf.random.normal([3, generator.latent_dimension]))[0]
-
-    # Create a list of average losses to use indeciding when to advance resolution
-    average_loss_diffs = [-4, -3, -2, -1]
-    avg_loss = 10e32
-    stop_loss_count = 0
+    test_latent = generate_random_style(3, generator.latent_dimension)
 
     for i in range(0, epochs):
         # Train the epoch and print the loss.
-        prev_avg_loss = avg_loss
-        avg_loss = train_epoch(encoder, generator, images, i)
-        print_avg_loss(avg_loss, i)
-        
+        avg_disc_loss, avg_gen_loss = train_epoch(discriminator, generator, images, i)
+        print_avg_loss(avg_disc_loss, avg_gen_loss, i)
         # Test.
-        test(encoder, generator, test_image, test_latent, out_path + "/test_" + str(i))
+        test(generator, test_image, test_latent, out_path + "/test_" + str(i))
+        if (i % (15 * (generator.current_resolution_index + 1)) == 0 and i != 0):
+            generator.advance_resolution()
+            discriminator.advance_resolution()
         
-        average_loss_diffs.pop(0)
-        average_loss_diffs.append(avg_loss - prev_avg_loss)
-        average_diff = sum(average_loss_diffs) / len(average_loss_diffs)
-        print("Average loss diff: " + str(average_diff))
-        if average_diff > generator.get_stop_loss_diff() and generator.current_resolution_index != len(generator.decode_resolutions):
-            stop_loss_count += 1
-            if stop_loss_count > 5:
-                generator.advance_resolution()
-                average_loss_diffs = [-4, -3, -2, -1]
-                avg_loss = 10e32
-                stop_loss_count = 0
 
-def test(encoder, generator, image, style, path):
+def test(generator, image, style, path):
     # Create a few different versions of the image.
     target_res = generator.decode_resolutions[generator.current_resolution_index]
     target_res_image = tf.image.resize(image, (target_res, target_res))
-
-    # Most basic thing: run the image through the whole autoencoder.
-    upscaled = generator(encoder(image))
-
-    # Also try using the low res image and applying a random "style" to it.
     generated = generator(style)
-
     cv2.imwrite(path + "_target.png", tf.squeeze(map_to_8_bit(target_res_image)[0,:,:,0]).numpy())
     cv2.imwrite(path + "_real.png", tf.squeeze(map_to_8_bit(image)[0,:,:,0]).numpy())
-    cv2.imwrite(path + "_upscaled.png", tf.squeeze(map_to_8_bit(upscaled)[0,:,:,0]).numpy())
     cv2.imwrite(path + "_generated_0.png", tf.squeeze(map_to_8_bit(generated)[0,:,:,0]).numpy())
     cv2.imwrite(path + "_generated_1.png", tf.squeeze(map_to_8_bit(generated)[1,:,:,0]).numpy())
     cv2.imwrite(path + "_generated_2.png", tf.squeeze(map_to_8_bit(generated)[2,:,:,0]).numpy())
@@ -124,11 +128,11 @@ def run(data_path, out_path):
     images = load_images(data_path)
 
     # Create the model.
-    encoder, generator = setup_model()
+    discriminator, generator = setup_model()
 
     # Train the model
     k_epochs = 2000
-    train(encoder, generator, images, out_path, k_epochs)
+    train(discriminator, generator, images, out_path, k_epochs)
 
     # TODO: test on test data
 
